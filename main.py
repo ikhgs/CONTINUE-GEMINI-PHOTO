@@ -21,6 +21,9 @@ model = genai.GenerativeModel(
     generation_config=generation_config,
 )
 
+# In-memory storage for global conversation history
+global_historique = []
+
 def upload_to_gemini(file_path, mime_type=None):
     """Uploads the given file to Gemini."""
     file = genai.upload_file(file_path, mime_type=mime_type)
@@ -28,51 +31,51 @@ def upload_to_gemini(file_path, mime_type=None):
 
 @app.route('/api/', methods=['POST'])
 def process_request():
-    # Check if an image file and a question are provided
-    if 'file' not in request.files:
-        return jsonify({"error": "No file part"}), 400
-    if 'question' not in request.form:
-        return jsonify({"error": "No question provided"}), 400
+    global global_historique
 
-    file = request.files['file']
-    question = request.form['question']
+    # Check if 'file' is provided
+    if 'file' in request.files:
+        file = request.files['file']
+        if file.filename == '':
+            return jsonify({"error": "No selected file"}), 400
+        
+        if not file.content_type.startswith('image/'):
+            return jsonify({"error": "Invalid file type. Please upload an image."}), 400
 
-    if file.filename == '':
-        return jsonify({"error": "No selected file"}), 400
-
-    # Save the file temporarily
-    file_path = os.path.join('/tmp', file.filename)
-    file.save(file_path)
-
-    # Upload the file to Gemini
-    uploaded_file = upload_to_gemini(file_path, mime_type=file.content_type)
-
-    # Start chat session
+        file_path = os.path.join('/tmp', file.filename)
+        file.save(file_path)
+        uploaded_file = upload_to_gemini(file_path, mime_type=file.content_type)
+        os.remove(file_path)
+        
+        # Add the uploaded file to the conversation history
+        global_historique.append({
+            "role": "user",
+            "parts": [uploaded_file, "Ce Quoi cette photo ?"]
+        })
+    
+    question = request.form.get('question')
+    if question:
+        global_historique.append({
+            "role": "user",
+            "parts": [question]
+        })
+    
+    # Start chat session with the historical context
     chat_session = model.start_chat(
-        history=[
-            {
-                "role": "user",
-                "parts": [
-                    uploaded_file,
-                    "Ce Quoi cette photo ?",
-                ],
-            },
-            {
-                "role": "model",
-                "parts": [
-                    "C'est une photo d'Andry Rajoelina, le président de Madagascar. Il est connu pour avoir dirigé le pays de 2018 à 2022.",
-                ],
-            },
-        ]
+        history=global_historique
     )
-
-    # Send the user question and get a response
+    
     response = chat_session.send_message(question)
-
-    # Clean up the temporary file
-    os.remove(file_path)
-
-    return jsonify({"response": response.text})
+    
+    # Add the model's response to the conversation history
+    global_historique.append({
+        "role": "model",
+        "parts": [response.text]
+    })
+    
+    return jsonify({
+        "response": response.text
+    })
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=5000)
