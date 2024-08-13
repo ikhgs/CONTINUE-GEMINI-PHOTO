@@ -1,5 +1,6 @@
 import os
 import tempfile
+import requests
 from flask import Flask, request, jsonify
 import google.generativeai as genai
 
@@ -22,39 +23,49 @@ model = genai.GenerativeModel(
     generation_config=generation_config,
 )
 
-# Global history to track the last conversation
-global_chat_session = model.start_chat(history=[])
+# Global chat history to maintain conversation state
+chat_history = []
 
 @app.route('/api/process', methods=['POST'])
 def process_image_and_prompt():
-    if 'image' not in request.files or 'prompt' not in request.form:
-        return jsonify({"error": "Image and prompt are required."}), 400
+    image_url = request.form.get('image_url')
+    image_file = request.files.get('image')
+    prompt = request.form.get('prompt')
 
-    prompt = request.form['prompt']
+    if not prompt:
+        return jsonify({"error": "Prompt is required."}), 400
 
-    # Handle conversation reset
-    if prompt.lower() == 'stop':
-        global global_chat_session
-        global_chat_session = model.start_chat(history=[])
-        return jsonify({"response": "Conversation has been reset."})
+    if image_url:
+        # Process image URL
+        response = requests.get(image_url)
+        if response.status_code != 200:
+            return jsonify({"error": "Failed to download image from URL."}), 400
 
-    # Save the image temporarily
-    image = request.files['image']
-    with tempfile.NamedTemporaryFile(delete=False, suffix='.jpg') as temp_file:
-        image_path = temp_file.name
-        image.save(image_path)
+        # Save the image temporarily
+        with tempfile.NamedTemporaryFile(delete=False, suffix='.jpg') as temp_file:
+            temp_file.write(response.content)
+            image_path = temp_file.name
 
-        # Upload the image to Gemini
-        file_uri = genai.upload_file(image_path, mime_type=image.mimetype).uri
+    elif image_file:
+        # Process uploaded image file
+        with tempfile.NamedTemporaryFile(delete=False, suffix='.jpg') as temp_file:
+            image_path = temp_file.name
+            image_file.save(image_path)
 
-        # Update the global chat session with the image and prompt
-        global_chat_session.history.append({
-            "role": "user",
-            "parts": [file_uri, prompt],
-        })
+    else:
+        return jsonify({"error": "Either 'image_url' or 'image' is required."}), 400
 
-        # Send the message and get the response
-        response = global_chat_session.send_message(prompt)
+    # Upload the image to Gemini
+    file_uri = genai.upload_file(image_path, mime_type="image/jpeg").uri
+
+    # Update the chat history with the image and prompt
+    chat_history.append({
+        "role": "user",
+        "parts": [file_uri, prompt],
+    })
+
+    # Send the message and get the response
+    response = model.send_message(prompt, history=chat_history)
 
     # Clean up temporary file
     os.remove(image_path)
@@ -68,14 +79,15 @@ def query_prompt():
     if not prompt:
         return jsonify({"error": "Prompt is required."}), 400
 
-    # Continue the conversation from where it was left off in the POST request
-    global_chat_session.history.append({
+    # Add the prompt to the chat history
+    chat_history.append({
         "role": "user",
         "parts": [prompt],
     })
 
     # Send the message and get the response
-    response = global_chat_session.send_message(prompt)
+    response = model.send_message(prompt, history=chat_history)
+    
     return jsonify({"response": response.text})
 
 if __name__ == '__main__':
