@@ -9,7 +9,7 @@ genai.configure(api_key=os.environ["GEMINI_API_KEY"])
 
 app = Flask(__name__)
 
-# Dictionary to store chat sessions
+# Dictionary to store chat sessions and history
 sessions = {}
 
 def upload_to_gemini(file_path, mime_type=None):
@@ -48,8 +48,10 @@ def process_image_and_prompt():
         # Upload the image to Gemini
         file_uri = upload_to_gemini(image_path, mime_type=image.mimetype)
 
-        # Create or retrieve chat session
+        # Create a unique session ID
         session_id = str(uuid.uuid4())
+
+        # Start a new chat session with the image and prompt
         chat_session = model.start_chat(
             history=[
                 {
@@ -61,28 +63,53 @@ def process_image_and_prompt():
                 },
             ]
         )
-        sessions[session_id] = chat_session
 
-        response = chat_session.send_message(prompt)
+        # Store the session in memory
+        sessions[session_id] = {
+            'chat_session': chat_session,
+            'history': [
+                {
+                    "role": "user",
+                    "parts": [
+                        file_uri,
+                        prompt,
+                    ],
+                },
+            ]
+        }
 
     # Clean up temporary file
     os.remove(image_path)
 
-    return jsonify({"session_id": session_id, "response": response.text})
+    return jsonify({"session_id": session_id, "response": "Image and prompt processed. You can continue the conversation with GET requests."})
 
 @app.route('/api/query', methods=['GET'])
 def query_prompt():
     session_id = request.args.get('session_id')
     prompt = request.args.get('prompt')
-    
+
     if not session_id or not prompt:
         return jsonify({"error": "Session ID and prompt are required."}), 400
 
-    chat_session = sessions.get(session_id)
-    if not chat_session:
+    session_data = sessions.get(session_id)
+    if not session_data:
         return jsonify({"error": "Session not found."}), 404
 
+    chat_session = session_data['chat_session']
+    history = session_data['history']
+
+    # Add the new prompt to the history
+    history.append({
+        "role": "user",
+        "parts": [prompt],
+    })
+
+    # Send the message to the model
     response = chat_session.send_message(prompt)
+
+    # Update the session history
+    session_data['history'] = history
+
     return jsonify({"response": response.text})
 
 if __name__ == '__main__':
