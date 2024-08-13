@@ -65,7 +65,10 @@ def process_image_and_prompt():
     })
 
     # Send the message and get the response
-    response = model.send_message(prompt, history=chat_history)
+    try:
+        response = model.generate_text(prompt, history=chat_history)  # Adjust method if needed
+    except AttributeError as e:
+        return jsonify({"error": f"Error in API call: {str(e)}"}), 500
 
     # Clean up temporary file
     os.remove(image_path)
@@ -86,8 +89,11 @@ def query_prompt():
     })
 
     # Send the message and get the response
-    response = model.send_message(prompt, history=chat_history)
-    
+    try:
+        response = model.generate_text(prompt, history=chat_history)  # Adjust method if needed
+    except AttributeError as e:
+        return jsonify({"error": f"Error in API call: {str(e)}"}), 500
+
     return jsonify({"response": response.text})
 
 if __name__ == '__main__':
